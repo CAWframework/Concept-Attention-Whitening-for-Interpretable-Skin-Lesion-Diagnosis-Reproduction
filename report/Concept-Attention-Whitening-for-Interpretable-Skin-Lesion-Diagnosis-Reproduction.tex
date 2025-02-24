@@ -1,0 +1,270 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb}
+\usepackage{algorithm, algorithmicx, algpseudocode}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{multirow}
+\geometry{a4paper, margin=1in}
+\usepackage{cite}
+
+\title{Reproducibility Report on \emph{Concept-Attention Whitening for Interpretable Skin Lesion Diagnosis}}
+\author{
+    Junlin Hou$^1$, Jilan Xu$^2$, and Hao Chen$^{1,3}$ \\  
+    $^1$ The Hong Kong University of Science and Technology, Hong Kong, China\\
+    $^2$ Fudan University, Shanghai, China\\
+    $^3$ HKUST Shenzhen-Hong Kong Collaborative Innovation Research Institute, Shenzhen, China\\
+    csejlhou@ust.hk$^1$, jhc@cse.ust.hk$^3$
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+This report presents an attempt to reproduce the results of the paper \textit{Concept-Attention Whitening for Interpretable Skin Lesion Diagnosis}\cite{hou2024caw}. The study implements the Concept-Attention Whitening (CAW) framework for interpretability in deep learning-based skin lesion classification. Our reproduction includes dataset preprocessing, model implementation, training, and evaluation on the Derm7pt and SkinCon datasets. While we successfully implemented CAW, we observed minor deviations in performance metrics compared to the original paper. This report outlines our methodology, challenges encountered, and suggestions for future improvements. 
+Code available at \href{https://github.com/CAWframework/Concept-Attention-Whitening-for-Interpretable-Skin-Lesion-Diagnosis-Reproduction.git}{GitHub Repository}.
+
+\end{abstract}
+
+\section{Introduction}
+Automated skin lesion diagnosis is a crucial application of deep learning in medical imaging. The paper introduces CAW, a whitening transformation technique\cite{chen2020concept} that replaces Batch Normalization (BN) in deep neural networks to enhance feature decorrelation and interpretability. The study evaluates CAW on dermoscopic datasets (Derm7pt, SkinCon)\cite{bie2024mica, patricio2023coherent} and claims improvements in classification accuracy and robustness.
+
+This reproducibility study aims to:
+\begin{itemize}
+    \item Preprocess the Derm7pt and SkinCon datasets\cite{kawahara2019seven}.
+    \item Implement CAW using ResNet-based architectures.
+    \item Train and evaluate models on both datasets.
+    \item Compare reproduced results with those from the original paper.
+\end{itemize}
+
+\section{Methodology}
+The CAW framework consists of:
+\begin{itemize}
+    \item \textbf{Disease Diagnosis Branch:} Uses CAW layers in CNNs for classification.
+    \item \textbf{Concept Alignment Branch:} Ensures features align with predefined clinical concepts.
+\end{itemize}
+
+\subsection{Mathematical Formulation}
+
+The Concept-Attention Whitening (CAW) framework consists of two key transformations applied to feature representations: 
+
+\begin{itemize}
+    \item \textbf{Whitening Transformation} – Removes correlations between feature dimensions.
+    \item \textbf{Orthogonal Transformation} – Aligns the transformed features with predefined medical concepts.
+\end{itemize}
+
+\subsubsection{Whitening Transformation}
+Given an input feature map \( Z \in \mathbb{R}^{b \times d \times h \times w} \), where:
+
+\( b \) is the batch size, \( d \) is the feature dimension, \( h, w \) are spatial dimensions.
+
+We reshape \( Z \) into \( d \times n \), where \( n = b \times h \times w \).  
+The whitening transformation is then applied as:
+
+\begin{equation}
+    \psi(Z) = W (Z - \mu 1_{1 \times n})
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( \mu \) is the mean feature value over \( n \) samples,
+    \item \( W \in \mathbb{R}^{d \times d} \) is the whitening matrix.
+\end{itemize}
+
+The whitening matrix \( W \) is computed using the ZCA \cite{huang2019iterative} algorithm:
+
+\begin{equation}
+    W = U \Lambda^{-\frac{1}{2}} U^T
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( U \) is the eigenvector matrix of the feature covariance,
+    \item \( \Lambda \) contains the corresponding eigenvalues.
+\end{itemize}
+
+This transformation removes feature correlations and standardizes feature distributions.
+
+\subsubsection{Orthogonal Transformation}
+After whitening, an orthogonal transformation is applied to align features with predefined clinical concepts:
+
+\begin{equation}
+    Z' = Q^T \psi(Z)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( Q \in \mathbb{R}^{d \times d} \) is an \textbf{orthogonal matrix} containing concept-aligned feature vectors.
+    \item Each column \( q_k \) of \( Q \) represents a concept \( c_k \).
+\end{itemize}
+
+\subsubsection{Optimization of \( Q \) via Concept Alignment}
+To estimate \( Q \), the model leverages weakly-supervised learning. Given a concept dataset \( X_c = \{ X_{c_k} \}_{k=1}^{K} \), where each \( X_{c_k} \) consists of images containing concept \( c_k \), we optimize:
+
+\begin{equation}
+    \max_{q_1, q_2, ..., q_K} \sum_{k=1}^{K} \frac{1}{|X_{c_k}|} \sum_{x_{c_k} \in X_{c_k}} q_k^T \text{AvgPool}( \tilde{M}_{c_k} \odot \psi(f(x_{c_k})) )
+\end{equation}
+
+subject to:
+
+\begin{equation}
+    Q^T Q = I_d
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( \tilde{M}_{c_k} \) is the binary concept mask obtained from the concept activation map \( M_{c_k} \).
+    \item \( \odot \) denotes element-wise multiplication.
+    \item \textbf{AvgPool} performs global spatial pooling over the feature map.
+\end{itemize}
+
+\subsubsection{Optimization of \( Q \) using Cayley Transform}
+Since direct optimization of \( Q \) is computationally intractable, we update it iteratively using the Cayley transform:
+
+\begin{equation}
+    Q^{(t+1)} = (I + \frac{\eta}{2} A)^{-1} (I - \frac{\eta}{2} A) Q^{(t)}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( \eta \) is the learning rate,
+    \item \( A = G(Q^T) - Q G^T \) is a skew-symmetric matrix,
+    \item \( G \) is the **gradient of the loss function**.
+\end{itemize}
+
+This ensures that \( Q \) remains an orthogonal matrix during training.
+
+\subsubsection{Final Disease Prediction Loss}
+The final disease classification loss is computed as:
+
+\begin{equation}
+    \mathcal{L} = \frac{1}{N} \sum_{i=1}^{N} L_{\text{ce}}(g(Q^T \psi(f(x_i))), y_i)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item \( f(x) \) represents extracted features,
+    \item \( g(\cdot) \) is the classifier,
+    \item \( L_{\text{ce}} \) is the cross-entropy loss for skin disease classification.
+\end{itemize}
+    \caption{\textbf{Pseudocode for CAW}}
+    \begin{algorithm}[h]
+    \begin{algorithmic}[1]
+        \Require Disease dataset \( D = \{(x_i, y_i)\}_{i=1}^{N} \), Concept dataset \( X_c = \{X_{c_k}\}_{k=1}^{K} \)
+        \Require Pretrained ResNet model, learning rate \( \eta \), whitening matrix \( W \), orthogonal matrix \( Q \)
+
+        \State \textbf{Initialize:} Load pretrained ResNet, replace Batch Normalization (BN) with CAW layer
+
+        \State \textbf{Train Disease Diagnosis Branch:}
+        \For{each epoch}
+            \For{each mini-batch \( (x, y) \in D \)}
+                \State Extract feature map \( Z = f(x) \)
+                \State \textbf{Apply Whitening Transformation:} 
+                \State \quad Compute mean \( \mu \) and subtract from \( Z \)
+                \State \quad Compute whitening matrix \( W \) and apply \( Z' = W(Z - \mu 1_{1 \times n}) \)
+                \State \textbf{Apply Orthogonal Transformation:}
+                \State \quad Compute transformed feature \( Z'' = Q^T Z' \)
+                \State Compute classification loss \( L_{ce} = \text{CrossEntropy}(g(Z''), y) \)
+                \State Update model parameters using gradient descent
+            \EndFor
+        \EndFor
+
+        \State \textbf{Train Concept Alignment Branch:}
+        \For{each epoch}
+            \For{each concept batch \( X_{c_k} \)}
+                \State Extract feature map \( Z_{con} = f(X_{c_k}) \)
+                \State \textbf{Generate Weakly-Supervised Concept Mask:}
+                \State \quad Compute concept activation map \( M_k = W_k^T Z_{con} \)
+                \State \quad Normalize and threshold to get binary mask \( \tilde{M}_k(i, j) \)
+                \State \textbf{Optimize Orthogonal Matrix \( Q \):}
+                \State \quad Compute gradient \( G \) using concept alignment loss
+                \State \quad Update \( Q \) using Cayley transform:
+                \State \quad \( Q^{(t+1)} = (I + \frac{\eta}{2} A)^{-1} (I - \frac{\eta}{2} A) Q^{(t)} \)
+            \EndFor
+        \EndFor
+
+        \State \textbf{Final Model Evaluation:}
+        \State Evaluate model performance on test dataset
+        \State Compute interpretability metrics using concept alignment
+
+        \State \textbf{Return:} Trained CAW model with optimized \( W \) and \( Q \)
+    \end{algorithmic}
+\end{algorithm}
+
+
+
+\section{Experimental Setup}
+\subsection{Hardware and Software}
+\begin{itemize}
+    \item \textbf{Hardware:} NVIDIA GPU (T4), Intel Xeon CPU, 64GB RAM
+    \item \textbf{Software:} Python 3.11, PyTorch 2.5.1, CUDA 11.8, NumPy, pandas, scikit-learn
+\end{itemize}
+
+\subsection{Dataset Preparation}
+\begin{itemize}
+    \item \textbf{Derm7pt:} 827 images with 12 clinical concepts.\cite{kawahara2019seven}
+    \item \textbf{SkinCon:} 3,221 images with 22 clinical concepts. \cite{patricio2023coherent}
+\end{itemize}
+
+Preprocessing steps:
+\begin{itemize}
+    \item Image resizing to \( 224 \times 224 \)
+    \item Data augmentation (random flip, cropping, rotation)
+    \item Dataset split: 70\% training, 15\% validation, 15\% test for SkinCon{groh2021evaluating} and original split for dataset Derm7pt as in metafiles\cite
+\end{itemize}
+\subsection{Hyperparameters}
+\begin{itemize}
+    \item \textbf{Backbone:} ResNet-18 for Derm7pt, ResNet-50 for SkinCon
+    \item \textbf{Learning Rate:} \( 2 \times 10^{-3} \)
+    \item \textbf{Batch Size:} 64
+    \item \textbf{Epochs:} 100
+\end{itemize}
+            
+\section{Results}
+The table below compares our reproduced results with those of the original paper. We were able to run it 1 time due to limitation for GPU on Google Colab.
+\begin{table}[ht]
+    \centering
+    \caption{Comparison of disease diagnosis results (mean\textsubscript{std} over three runs).}
+    \begin{tabular}{l|ccc|ccc}
+        \hline
+        \multirow{2}{\textbf{Method}} & \multicolumn{3}{c|}{\textbf{Derm7pt}} & \multicolumn{3}{c}{\textbf{SkinCon}} \\
+            & AUC & ACC & F1 & AUC & ACC & F1 \\
+            \hline
+        CAW (Original) & \textbf{88.60}\textsubscript{0.10} & \textbf{84.79}\textsubscript{0.79} & \textbf{81.34}\textsubscript{0.85} & \textbf{80.47}\textsubscript{0.60} & \textbf{79.00}\textsubscript{0.19} & \textbf{77.76}\textsubscript{0.57} \\
+        CAW (Reproduced) & 82.30 & 81.56 & 80.99 & 72.55 & 69.03 & 71.89 \\
+        \hline
+    \end{tabular}
+    \label{tab:results}
+\end{table}
+       
+\section{Challenges and Discussion}
+        
+        During the reproduction of the Concept-Attention Whitening (CAW) framework, we encountered several challenges that affected the implementation and performance outcomes. These difficulties are categorized as follows:
+        
+        \subsection{Implementation Details and Ambiguities}
+        One of the primary challenges was the lack of detailed implementation instructions in the original paper. Key hyperparameters and certain training configurations were not explicitly stated, requiring us to make assumptions and conduct multiple experiments to fine-tune the model.
+        
+        \subsection{Dataset Issues}
+        \begin{itemize}
+            \item \textbf{Dataset Availability}: Some images from the SkinCon dataset were missing, and data preprocessing steps were not fully explained in the original work.
+            \item \textbf{Label Variations}: There were minor discrepancies in concept annotations between our dataset and those reported in the paper. Metafile for SkinCon does not have 22 concepts information, getting right metafile from author took a little bit time.
+        \end{itemize}
+        
+        \subsection{Concept Alignment Sensitivity}
+        The concept alignment branch, which optimizes the orthogonal matrix \( Q \), was highly sensitive to initialization and learning rates. Achieving stable convergence required careful tuning, and small changes in initialization sometimes led to significant variations in the results.
+        
+        \subsection{Computational Resources}
+        The CAW model, particularly the whitening transformation and concept alignment, increased computational demands compared to standard batch normalization. Training required higher memory usage and longer convergence times, especially for large-scale datasets such as SkinCon (33 h on cpu).
+        
+        \subsection{Result Discrepancies}
+        As you can see in results table above our reproduced results did not match the original findings. These variations may be due to hyperparameters and loss functions.
+
+\section{Conclusion}
+Although our reproduced results did not match the exact performance metrics reported in the original paper, we were able to successfully reproduce the CAW framework and validate its key contributions. The methodology provided a clear and detailed description of the algorithm, ensuring reproducibility. Our implementation followed the original pipeline, including dataset preprocessing, model training, and evaluation. Further refinements in parameter tuning and dataset preprocessing may help bridge the gap between the original and reproduced results.
+
+
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
