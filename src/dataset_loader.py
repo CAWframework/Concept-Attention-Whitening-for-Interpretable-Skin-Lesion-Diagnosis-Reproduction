@@ -34,6 +34,56 @@ class SkinConDataset(Dataset):
 
         return image, label
 
+class ConceptDataset(Dataset):
+    """ Custom Dataset for Concept Learning with CAW. """
+
+    def __init__(self, concept_dir, concept_label_file, transform=None):
+        self.concept_dir = concept_dir
+        self.transform = transform
+
+        # ✅ Load concept labels
+        self.df = pd.read_csv(concept_label_file)
+        # ✅ Ensure 'ImageID' is present
+        if "ImageID" not in self.df.columns:
+            raise KeyError(f"❌ Missing 'ImageID' column in {concept_label_file}. Check dataset preprocessing!")
+
+        self.image_column = "ImageID"
+        self.concept_columns = [col for col in self.df.columns if col != "ImageID"]
+        # ✅ Extract concept folder names
+        self.concept_dirs = {concept: os.path.join(concept_dir, concept) for concept in os.listdir(concept_dir)}
+
+        # ✅ Ensure ImageID contains only filenames (remove paths)
+        self.df["ImageID"] = self.df["ImageID"].apply(lambda x: os.path.basename(str(x)))  # Strip paths
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        """Load image and corresponding concept labels."""
+        row = self.df.iloc[idx]
+        image_name = str(row[self.image_column]).strip()
+
+        # ✅ Search for the image in all concept subfolders
+        image_path = None
+        for concept_folder in self.concept_dirs.values():
+            possible_path = os.path.join(concept_folder, image_name)
+            if os.path.exists(possible_path):
+                image_path = possible_path
+                break  # Stop searching once found
+
+        # ✅ Raise an error if the image wasn't found
+        if image_path is None:
+            raise FileNotFoundError(f"❌ Image not found in any concept folders: {image_name}")
+
+        # ✅ Load image
+        image = Image.open(image_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        concept_labels = row[self.concept_columns].values.astype(float)
+        return image, torch.tensor(concept_labels, dtype=torch.float)
+
+
 def get_dataloaders(disease_dataset, concept_dataset=None, batch_size=64, num_workers=4, shuffle=True):
     """
     Loads both disease dataset D and concept dataset X_c for CAW training.
@@ -122,27 +172,19 @@ def get_dataloaders(disease_dataset, concept_dataset=None, batch_size=64, num_wo
     # === Load Concept Dataset (Optional) ===
     if concept_dataset:
         concept_dataset_path = os.path.abspath(os.path.join("datasets", concept_dataset))
+        concept_label_file = os.path.join(concept_dataset_path, "concept_labels.csv")
 
-        if os.path.isdir(concept_dataset_path):
-            concept_dataset = datasets.ImageFolder(root=concept_dataset_path, transform=concept_transform)
+        if os.path.isdir(concept_dataset_path) and os.path.exists(concept_label_file):
+            concept_dataset = ConceptDataset(concept_dataset_path, concept_label_file, transform=concept_transform)
 
-            if len(concept_dataset) == 0:
-                print(f"⚠️ Warning: Concept dataset '{concept_dataset_path}' is empty. Skipping...")
-                dataloaders["concept"] = None
-            else:
-                dataloaders["concept"] = DataLoader(
-                    concept_dataset,
-                    batch_size=batch_size,
-                    shuffle=True,  # ✅ Always shuffle concept dataset
-                    num_workers=num_workers
-                )
+            dataloaders["concept"] = DataLoader(
+                concept_dataset,
+                batch_size=batch_size,
+                shuffle=True,  # ✅ Always shuffle concept dataset
+                num_workers=num_workers
+            )
         else:
             print(f"⚠️ Warning: Concept dataset '{concept_dataset_path}' not found. Skipping concept alignment.")
             dataloaders["concept"] = None
-
-    # === Print Dataset Sizes ===
-    for split, loader in dataloaders.items():
-        if loader is not None:
-            print(f"📂 {split.capitalize()} Dataset Size: {len(loader.dataset)}")
 
     return dataloaders
